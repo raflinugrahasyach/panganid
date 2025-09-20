@@ -45,9 +45,8 @@ def load_data(file_path):
     df = pd.read_excel(file_path)
     df['ds'] = pd.to_datetime(df['ds'])
     
-    # --- PERBAIKAN: Hitung MAPE dengan benar (* 100) ---
     df_pred_only = df.dropna(subset=['harga_prediksi', 'harga_aktual'])
-    df_pred_only = df_pred_only[df_pred_only['harga_aktual'] != 0] # Hindari pembagian dengan nol
+    df_pred_only = df_pred_only[df_pred_only['harga_aktual'] != 0]
     
     mape_list = []
     for (lokasi, komoditas), group in df_pred_only.groupby(['lokasi', 'komoditas']):
@@ -59,8 +58,8 @@ def load_data(file_path):
 
 try:
     df, df_mape = load_data('semua_output.xlsx')
-except FileNotFoundError as e:
-    st.error(f"Error: File tidak ditemukan. Pastikan file `semua_output.xlsx` ada di folder yang sama.")
+except FileNotFoundError:
+    st.error("Error: File `semua_output.xlsx` tidak ditemukan. Pastikan file ada di folder yang sama.")
     st.stop()
 
 
@@ -73,14 +72,12 @@ page = st.sidebar.radio("Pilih Halaman:", ("Ringkasan Eksekutif", "Analisis Pera
 st.sidebar.markdown("---")
 st.sidebar.header("Filter Data")
 
-# --- PERBAIKAN: Ubah selectbox menjadi multiselect (checklist) ---
 sorted_lokasi = sorted(df['lokasi'].unique().tolist())
-selected_lokasi = st.sidebar.multiselect("Pilih Lokasi:", sorted_lokasi, default=sorted_lokasi[0] if sorted_lokasi else [])
+selected_lokasi = st.sidebar.multiselect("Pilih Lokasi:", sorted_lokasi, default=sorted_lokasi[:1])
 
 sorted_komoditas = sorted(df['komoditas'].unique().tolist())
-selected_komoditas = st.sidebar.multiselect("Pilih Komoditas:", sorted_komoditas, default=sorted_komoditas[0] if sorted_komoditas else [])
+selected_komoditas = st.sidebar.multiselect("Pilih Komoditas:", sorted_komoditas, default=sorted_komoditas[:1])
 
-# Filter data berdasarkan pilihan checklist
 if not selected_lokasi or not selected_komoditas:
     st.warning("Silakan pilih minimal satu Lokasi dan satu Komoditas di sidebar.")
     st.stop()
@@ -92,12 +89,8 @@ df_mape_filtered = df_mape[(df_mape['lokasi'].isin(selected_lokasi)) & (df_mape[
 # ==============================================================================
 # HEADER UTAMA DENGAN DETAIL
 # ==============================================================================
-st.title(f"Dashboard Prediksi Harga Pangan")
-
-# --- PERBAIKAN: Tambahkan judul dan detail dinamis ---
-lokasi_str = ", ".join(selected_lokasi)
-komoditas_str = ", ".join(selected_komoditas)
-st.subheader(f"Menampilkan: {komoditas_str} di {lokasi_str}")
+st.title("Dashboard Prediksi Harga Pangan")
+st.subheader(f"Menampilkan: {len(selected_komoditas)} Komoditas di {len(selected_lokasi)} Lokasi")
 min_date = df_filtered['ds'].min().strftime('%d %B %Y')
 max_date = df_filtered['ds'].max().strftime('%d %B %Y')
 st.markdown(f"**Rentang Waktu Data:** {min_date} hingga {max_date}")
@@ -118,44 +111,50 @@ def render_ringkasan_eksekutif():
     with col1:
         avg_mape = df_mape_filtered['MAPE (%)'].mean() if not df_mape_filtered.empty else 0
         create_metric_card("MAPE Rata-rata", f"{avg_mape:.2f}%")
-        
     with col2:
-        last_actual_price = df_filtered.dropna(subset=['harga_aktual'])['harga_aktual'].iloc[-1] if not df_filtered.empty else 0
-        create_metric_card("Harga Aktual Terkini", f"Rp {last_actual_price:,.0f}")
-
+        last_actual = df_filtered.dropna(subset=['harga_aktual']).sort_values('ds').iloc[-1] if not df_filtered.empty else None
+        create_metric_card("Harga Aktual Terkini", f"Rp {last_actual['harga_aktual']:,.0f}" if last_actual is not None else "N/A")
     with col3:
-        pred_data = df_filtered.dropna(subset=['harga_prediksi'])
-        first_pred_price = pred_data['harga_prediksi'].iloc[0] if not pred_data.empty else 0
-        create_metric_card("Prediksi Harga Berikutnya", f"Rp {first_pred_price:,.0f}")
-        
+        first_pred = df_filtered.dropna(subset=['harga_prediksi']).sort_values('ds').iloc[0] if not df_filtered.dropna(subset=['harga_prediksi']).empty else None
+        create_metric_card("Prediksi Awal", f"Rp {first_pred['harga_prediksi']:,.0f}" if first_pred is not None else "N/A")
     with col4:
         total_series = len(df_filtered.groupby(['lokasi', 'komoditas']))
         create_metric_card("Jumlah Seri Data", f"{total_series}")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.subheader("Tren Harga Historis dan Prediksi")
     
-    if len(selected_lokasi) > 1 or len(selected_komoditas) > 1:
-        st.info("Grafik tren harga hanya ditampilkan untuk satu pilihan Lokasi dan Komoditas.")
-    else:
+    # --- PERBAIKAN: Tampilkan banyak grafik ---
+    st.subheader("Grafik Tren Harga Historis dan Prediksi")
+    for (lokasi, komoditas), group in df_filtered.groupby(['lokasi', 'komoditas']):
+        st.markdown(f"#### {komoditas} di {lokasi}")
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_aktual'], mode='lines', name='Harga Aktual', line=dict(color='#4299E1', width=2)))
-        fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_prediksi'], mode='lines', name='Harga Prediksi', line=dict(color='#ED64A6', width=2, dash='dash')))
-        fig.update_layout(template="plotly_dark", xaxis_title="Tanggal", yaxis_title="Harga (Rp)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=500)
+        fig.add_trace(go.Scatter(x=group['ds'], y=group['harga_aktual'], mode='lines', name='Harga Aktual', line=dict(color='#4299E1', width=2)))
+        fig.add_trace(go.Scatter(x=group['ds'], y=group['harga_prediksi'], mode='lines', name='Harga Prediksi', line=dict(color='#ED64A6', width=2, dash='dash')))
+        fig.update_layout(template="plotly_dark", xaxis_title=None, yaxis_title="Harga (Rp)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=400, margin=dict(t=40, b=40))
         st.plotly_chart(fig, use_container_width=True)
 
 def render_analisis_peramalan():
     st.header("🔍 Analisis Detail Peramalan")
+    st.markdown("Visualisasi perbandingan antara harga aktual dan hasil peramalan model untuk setiap data yang dipilih.")
 
-    if len(selected_lokasi) > 1 or len(selected_komoditas) > 1:
-        st.warning("Silakan pilih hanya satu Lokasi dan satu Komoditas untuk melihat analisis detail.")
-        return
+    # --- PERBAIKAN: Tampilkan banyak grafik dengan tabel detail ---
+    for (lokasi, komoditas), group in df_filtered.groupby(['lokasi', 'komoditas']):
+        st.markdown("---")
+        st.subheader(f"Hasil Prediksi untuk: {komoditas} di {lokasi}")
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_aktual'], name='Aktual', line=dict(color='cyan', width=2)))
-    fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_prediksi'], name='Prediksi', line=dict(color='magenta', width=2, dash='dot')))
-    fig.update_layout(template="plotly_dark", xaxis_title="Tanggal", yaxis_title="Harga (Rp)", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=500, xaxis=dict(rangeslider=dict(visible=True), type="date"))
-    st.plotly_chart(fig, use_container_width=True)
+        col1, col2 = st.columns([2, 1]) # Buat 2 kolom, grafik lebih besar
+        with col1:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=group['ds'], y=group['harga_aktual'], name='Aktual', line=dict(color='cyan', width=2)))
+            fig.add_trace(go.Scatter(x=group['ds'], y=group['harga_prediksi'], name='Prediksi', line=dict(color='magenta', width=2, dash='dot')))
+            fig.update_layout(template="plotly_dark", yaxis_title="Harga (Rp)", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=400, legend=dict(orientation="h", y=1.1), margin=dict(t=40, b=40))
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("**Data Tabel**")
+            tabel_data = group.dropna(subset=['harga_prediksi'])[['ds', 'harga_aktual', 'harga_prediksi']]
+            tabel_data['Selisih (%)'] = ((tabel_data['harga_prediksi'] - tabel_data['harga_aktual']) / tabel_data['harga_aktual']) * 100
+            st.dataframe(tabel_data.style.format({"harga_aktual": "Rp {:,.0f}", "harga_prediksi": "Rp {:,.0f}", "Selisih (%)": "{:.2f}%"}), height=380)
 
 def render_evaluasi_model():
     st.header("📊 Evaluasi Model (MAPE)")
@@ -176,7 +175,7 @@ def render_evaluasi_model():
         
     st.markdown("---")
     st.subheader("Tabel Detail MAPE")
-    st.dataframe(df_mape_filtered[['lokasi', 'komoditas', 'MAPE (%)']].style.format({"MAPE (%)": "{:.2f}%"}).background_gradient(cmap='viridis_r', subset=['MAPE (%)']), use_container_width=True)
+    st.dataframe(df_mape_filtered[['lokasi', 'komoditas', 'MAPE (%)']].sort_values('MAPE (%)').style.format({"MAPE (%)": "{:.2f}%"}).background_gradient(cmap='viridis_r', subset=['MAPE (%)']), use_container_width=True)
 
 # ==============================================================================
 # KONTROL ALUR HALAMAN UTAMA
