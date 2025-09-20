@@ -41,29 +41,26 @@ body { font-family: 'Segoe UI', sans-serif; }
 # FUNGSI UNTUK MEMUAT DAN MEMPROSES DATA
 # ==============================================================================
 @st.cache_data
-def load_main_data(file_path):
-    """Memuat dan memproses data utama dari file Excel."""
+def load_data(file_path):
     df = pd.read_excel(file_path)
     df['ds'] = pd.to_datetime(df['ds'])
-    return df
+    
+    # --- PERBAIKAN: Hitung MAPE dengan benar (* 100) ---
+    df_pred_only = df.dropna(subset=['harga_prediksi', 'harga_aktual'])
+    df_pred_only = df_pred_only[df_pred_only['harga_aktual'] != 0] # Hindari pembagian dengan nol
+    
+    mape_list = []
+    for (lokasi, komoditas), group in df_pred_only.groupby(['lokasi', 'komoditas']):
+        mape = np.mean(np.abs((group['harga_aktual'] - group['harga_prediksi']) / group['harga_aktual'])) * 100
+        mape_list.append({'lokasi': lokasi, 'komoditas': komoditas, 'MAPE (%)': mape})
+    
+    df_mape = pd.DataFrame(mape_list)
+    return df, df_mape
 
-@st.cache_data
-def load_mape_data(file_path):
-    """Memuat dan memproses file MAPE, memperbaiki format desimal koma."""
-    df = pd.read_excel(file_path)
-    if 'MAPE (%)' in df.columns:
-        # Perbaiki kolom MAPE: hapus '%', ganti koma dengan titik, ubah ke angka
-        df['MAPE (%)'] = df['MAPE (%)'].astype(str).str.replace('%', '', regex=False).str.replace(',', '.', regex=False).astype(float)
-    if 'unique_id' in df.columns:
-        df[['lokasi', 'komoditas']] = df['unique_id'].str.split('/', n=1, expand=True)
-    return df
-
-# Muat data dari dua file berbeda
 try:
-    df = load_main_data('semua_output.xlsx')
-    df_mape = load_mape_data('mape.xlsx')
+    df, df_mape = load_data('semua_output.xlsx')
 except FileNotFoundError as e:
-    st.error(f"Error: File tidak ditemukan. Pastikan file `{e.filename}` ada di folder yang sama dengan `dashboard.py`.")
+    st.error(f"Error: File tidak ditemukan. Pastikan file `semua_output.xlsx` ada di folder yang sama.")
     st.stop()
 
 
@@ -76,25 +73,35 @@ page = st.sidebar.radio("Pilih Halaman:", ("Ringkasan Eksekutif", "Analisis Pera
 st.sidebar.markdown("---")
 st.sidebar.header("Filter Data")
 
-# Filter Lokasi
-lokasi_list = ['Semua Lokasi'] + sorted(df['lokasi'].unique().tolist())
-selected_lokasi = st.sidebar.selectbox("Pilih Lokasi:", lokasi_list)
+# --- PERBAIKAN: Ubah selectbox menjadi multiselect (checklist) ---
+sorted_lokasi = sorted(df['lokasi'].unique().tolist())
+selected_lokasi = st.sidebar.multiselect("Pilih Lokasi:", sorted_lokasi, default=sorted_lokasi[0] if sorted_lokasi else [])
 
-# Filter Komoditas
-komoditas_list = ['Semua Komoditas'] + sorted(df['komoditas'].unique().tolist())
-selected_komoditas = st.sidebar.selectbox("Pilih Komoditas:", komoditas_list)
+sorted_komoditas = sorted(df['komoditas'].unique().tolist())
+selected_komoditas = st.sidebar.multiselect("Pilih Komoditas:", sorted_komoditas, default=sorted_komoditas[0] if sorted_komoditas else [])
 
-# Filter data berdasarkan pilihan sidebar
-df_filtered = df.copy()
-df_mape_filtered = df_mape.copy()
+# Filter data berdasarkan pilihan checklist
+if not selected_lokasi or not selected_komoditas:
+    st.warning("Silakan pilih minimal satu Lokasi dan satu Komoditas di sidebar.")
+    st.stop()
 
-if selected_lokasi != 'Semua Lokasi':
-    df_filtered = df_filtered[df_filtered['lokasi'] == selected_lokasi]
-    df_mape_filtered = df_mape_filtered[df_mape_filtered['lokasi'] == selected_lokasi]
+df_filtered = df[(df['lokasi'].isin(selected_lokasi)) & (df['komoditas'].isin(selected_komoditas))]
+df_mape_filtered = df_mape[(df_mape['lokasi'].isin(selected_lokasi)) & (df_mape['komoditas'].isin(selected_komoditas))]
 
-if selected_komoditas != 'Semua Komoditas':
-    df_filtered = df_filtered[df_filtered['komoditas'] == selected_komoditas]
-    df_mape_filtered = df_mape_filtered[df_mape_filtered['komoditas'] == selected_komoditas]
+
+# ==============================================================================
+# HEADER UTAMA DENGAN DETAIL
+# ==============================================================================
+st.title(f"Dashboard Prediksi Harga Pangan")
+
+# --- PERBAIKAN: Tambahkan judul dan detail dinamis ---
+lokasi_str = ", ".join(selected_lokasi)
+komoditas_str = ", ".join(selected_komoditas)
+st.subheader(f"Menampilkan: {komoditas_str} di {lokasi_str}")
+min_date = df_filtered['ds'].min().strftime('%d %B %Y')
+max_date = df_filtered['ds'].max().strftime('%d %B %Y')
+st.markdown(f"**Rentang Waktu Data:** {min_date} hingga {max_date}")
+st.markdown("---")
 
 
 # ==============================================================================
@@ -102,14 +109,10 @@ if selected_komoditas != 'Semua Komoditas':
 # ==============================================================================
 
 def create_metric_card(title, value):
-    """Membuat sebuah kartu metrik (KPI card)."""
     st.markdown(f'<div class="metric-card"><h3>{title}</h3><p>{value}</p></div>', unsafe_allow_html=True)
 
 def render_ringkasan_eksekutif():
-    """Merender halaman Ringkasan Eksekutif."""
-    st.title("📈 Ringkasan Eksekutif Prediksi Harga")
-    st.markdown("Gambaran umum performa model dan tren harga komoditas.")
-    st.markdown("---")
+    st.header("📈 Ringkasan Eksekutif")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -117,7 +120,7 @@ def render_ringkasan_eksekutif():
         create_metric_card("MAPE Rata-rata", f"{avg_mape:.2f}%")
         
     with col2:
-        last_actual_price = df_filtered['harga_aktual'].iloc[-1] if not df_filtered.empty else 0
+        last_actual_price = df_filtered.dropna(subset=['harga_aktual'])['harga_aktual'].iloc[-1] if not df_filtered.empty else 0
         create_metric_card("Harga Aktual Terkini", f"Rp {last_actual_price:,.0f}")
 
     with col3:
@@ -129,11 +132,11 @@ def render_ringkasan_eksekutif():
         total_series = len(df_filtered.groupby(['lokasi', 'komoditas']))
         create_metric_card("Jumlah Seri Data", f"{total_series}")
 
-    st.markdown("---")
+    st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Tren Harga Historis dan Prediksi")
     
-    if selected_lokasi == 'Semua Lokasi' or selected_komoditas == 'Semua Komoditas':
-        st.info("Pilih satu Lokasi dan satu Komoditas di sidebar untuk melihat grafik tren harga.")
+    if len(selected_lokasi) > 1 or len(selected_komoditas) > 1:
+        st.info("Grafik tren harga hanya ditampilkan untuk satu pilihan Lokasi dan Komoditas.")
     else:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_aktual'], mode='lines', name='Harga Aktual', line=dict(color='#4299E1', width=2)))
@@ -142,16 +145,12 @@ def render_ringkasan_eksekutif():
         st.plotly_chart(fig, use_container_width=True)
 
 def render_analisis_peramalan():
-    """Merender halaman Analisis Peramalan."""
-    st.title("🔍 Analisis Detail Peramalan")
-    st.markdown("Visualisasi perbandingan antara harga aktual dan hasil peramalan model.")
-    st.markdown("---")
+    st.header("🔍 Analisis Detail Peramalan")
 
-    if selected_lokasi == 'Semua Lokasi' or selected_komoditas == 'Semua Komoditas':
-        st.warning("Silakan pilih satu Lokasi dan satu Komoditas di sidebar untuk melihat analisis detail.")
+    if len(selected_lokasi) > 1 or len(selected_komoditas) > 1:
+        st.warning("Silakan pilih hanya satu Lokasi dan satu Komoditas untuk melihat analisis detail.")
         return
 
-    st.header(f"Hasil Prediksi untuk: {selected_komoditas} di {selected_lokasi}")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_aktual'], name='Aktual', line=dict(color='cyan', width=2)))
     fig.add_trace(go.Scatter(x=df_filtered['ds'], y=df_filtered['harga_prediksi'], name='Prediksi', line=dict(color='magenta', width=2, dash='dot')))
@@ -159,11 +158,8 @@ def render_analisis_peramalan():
     st.plotly_chart(fig, use_container_width=True)
 
 def render_evaluasi_model():
-    """Merender halaman Evaluasi Model."""
-    st.title("📊 Evaluasi Model (MAPE)")
-    st.markdown("Analisis Mean Absolute Percentage Error (MAPE) untuk mengukur akurasi model.")
-    st.markdown("---")
-
+    st.header("📊 Evaluasi Model (MAPE)")
+    
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Performa Model per Komoditas")
